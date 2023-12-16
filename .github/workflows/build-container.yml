@@ -1,0 +1,76 @@
+name: Build Container for Telegram API Server
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 2 */7 * *"
+
+env:
+  WORKING_DIR: ${{ github.workspace }}/tdlib
+  TDLIB_REPO_DIR: ${{ github.workspace }}/tdlib/tdlib-telegram-bot-api
+  DOCKERFILE_REPO_DIR: ${{ github.workspace }}/tdlib/docker
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/telegram-api-server
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    name: Build amd64 and arm64 images
+    steps:
+
+      - name: Checkout API repo
+        uses: actions/checkout@v4
+        with:
+          repository: tdlib/telegram-bot-api
+          path: ${{ env.TDLIB_REPO_DIR }}
+
+      - name: Checkout Dockerfile
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+          path: ${{ env.DOCKERFILE_REPO_DIR }}
+
+      - name: Apply Dockerfile
+        run: |
+          cp ${{ env.DOCKERFILE_REPO_DIR }}/Dockerfile ${{ env.TDLIB_REPO_DIR }}/Dockerfile
+
+      - name: Get release sha and run number
+        id: get-sha
+        working-directory: ${{ env.TDLIB_REPO_DIR }}
+        run: |
+          echo "refname=$($(git describe --tags || git rev-parse --short HEAD))" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v1
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=tdlib-${{ steps.tdlib-git.outputs.refname }}-$(date -u +'%Y%m%d')
+
+      - name: Build and push
+        id: docker_build
+        timeout-minutes: 900
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ env.TDLIB_REPO_DIR }}
+          file: ${{ env.TDLIB_REPO_DIR }}/Dockerfile
+          platforms: linux/arm64,linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
